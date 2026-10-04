@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import CursorScrubVideo, { FFMPEG_README } from "./CursorScrubVideo.jsx";
 
-const DEMO = { name: "demo.mp4 (built-in)", src: "/demo.mp4" };
+const DEMO = { name: "demo.mp4 (built-in)", src: "demo.mp4" };
 
 export default function App() {
   const [file, setFile] = useState(DEMO.src);
