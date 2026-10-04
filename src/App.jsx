@@ -1,25 +1,36 @@
 import React, { useState } from "react";
 import CursorScrubVideo, { FFMPEG_README } from "./CursorScrubVideo.jsx";
 
+// Cursor→time keypoints for every axis mode. Horizontal: head turns left↔right (1.0s→3.0s).
+// Vertical: chin up (4.2s) → level (5.5s) → chin down (6.4s).
+const DEMO_KEYS = {
+  horizontalKeys: [[0, 1], [0.5, 2], [1, 3]],
+  verticalKeys: [[0, 4.2], [0.5, 5.5], [1, 6.4]],
+};
 const DEMO = { name: "demo.mp4 (built-in)", src: "demo.mp4" };
 
 export default function App() {
   const [file, setFile] = useState(DEMO.src);
   const [fileName, setFileName] = useState(DEMO.name);
-  const [axis, setAxis] = useState("horizontal");
-  const [reverse, setReverse] = useState(false);
+  const [axis, setAxis] = useState("both");
+  const [startTime, setStartTime] = useState(0);
+  const [endTime, setEndTime] = useState(0);
   const [trackingArea, setTrackingArea] = useState("component");
-  const [smoothing, setSmoothing] = useState(0.22);
+  const [smoothing, setSmoothing] = useState(0.06);
   const [objectFit, setObjectFit] = useState("cover");
   const [showPoster, setShowPoster] = useState(true);
   const [borderRadius, setBorderRadius] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [open, setOpen] = useState(false);
+  const isDemo = file === DEMO.src;
 
   const onFile = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
     setFile(f);
     setFileName(f.name);
+    setStartTime(0);
+    setEndTime(0);
   };
 
   const copy = async () => {
@@ -32,7 +43,11 @@ export default function App() {
 
   return (
     <div className="app">
-      <aside className="panel">
+      <button className="panel-toggle" onClick={() => setOpen((o) => !o)}
+        aria-expanded={open} aria-controls="controls-panel">
+        {open ? "Close controls" : "Open controls"}
+      </button>
+      <aside id="controls-panel" className={`panel ${open ? "open" : ""}`} aria-hidden={!open}>
         <h1>CursorScrubVideo</h1>
 
         <Field label="videoFile" hint={fileName || "none"}>
@@ -43,11 +58,17 @@ export default function App() {
         </Field>
 
         <Field label="axis">
-          <Select value={axis} onChange={setAxis} options={["horizontal", "vertical"]} />
+          <Select value={axis} onChange={setAxis} options={["horizontal", "vertical", "both"]} />
         </Field>
 
-        <Field label="reverse">
-          <Toggle checked={reverse} onChange={setReverse} />
+        <Field label="startTime" hint={`${startTime.toFixed(1)}s`}>
+          <input type="range" min="0" max="30" step="0.1" value={startTime}
+            onChange={(e) => setStartTime(+e.target.value)} />
+        </Field>
+
+        <Field label="endTime" hint={endTime > 0 ? `${endTime.toFixed(1)}s` : "end"}>
+          <input type="range" min="0" max="30" step="0.1" value={endTime}
+            onChange={(e) => setEndTime(+e.target.value)} />
         </Field>
 
         <Field label="trackingArea">
@@ -71,12 +92,6 @@ export default function App() {
           <input type="range" min="0" max="200" step="1" value={borderRadius}
             onChange={(e) => setBorderRadius(+e.target.value)} />
         </Field>
-
-        <div className="note">
-          <strong>For buttery scrubbing</strong>, encode the video with every frame as a keyframe:
-          <pre>{FFMPEG_README}</pre>
-          <button className="link" onClick={copy}>{copied ? "Copied!" : "Copy command"}</button>
-        </div>
       </aside>
 
       <main className="stage">
@@ -84,7 +99,10 @@ export default function App() {
           <CursorScrubVideo
             videoFile={file}
             axis={axis}
-            reverse={reverse}
+            horizontalKeys={isDemo ? DEMO_KEYS.horizontalKeys : undefined}
+            verticalKeys={isDemo ? DEMO_KEYS.verticalKeys : undefined}
+            startTime={startTime}
+            endTime={endTime > 0 ? endTime : undefined}
             trackingArea={trackingArea}
             smoothing={smoothing}
             objectFit={objectFit}

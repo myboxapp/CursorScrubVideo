@@ -19,11 +19,15 @@ export const FFMPEG_README =
  *
  * @param {object}   props
  * @param {File|string} props.videoFile  Required. A video/* File (or a URL string).
- * @param {"horizontal"|"vertical"} [props.axis="horizontal"]  Axis that scrubs.
- * @param {boolean}  [props.reverse=false]  Flip the mapping on the selected axis.
- *        false: left→right / top→bottom = start→end.
+ * @param {"horizontal"|"vertical"|"both"} [props.axis="horizontal"]  Axis that scrubs.
+ *        "both": whichever axis the cursor is further from the centre on drives the playhead,
+ *        using horizontalKeys / verticalKeys (a video has one timeline, so the axes can't blend).
+ * @param {Array<[number, number]>} [props.horizontalKeys]  [cursor 0..1, time s] points, piecewise-linear. Used by every axis mode.
+ * @param {Array<[number, number]>} [props.verticalKeys]    same, for the vertical axis.
+ * @param {number}   [props.startTime=0]  Playhead time (s) at the start of the cursor range.
+ * @param {number}   [props.endTime]  Playhead time (s) at the end of the range. Defaults to the video duration.
  * @param {"component"|"window"} [props.trackingArea="component"]
- * @param {number}   [props.smoothing=0.22]  0.02–1. Higher = snappier, lower = more inertia.
+ * @param {number}   [props.smoothing=0.06]  0.02–1. Higher = snappier, lower = more inertia.
  * @param {"cover"|"contain"|"fill"} [props.objectFit="cover"]
  * @param {boolean}  [props.showPoster=true]  Show the first frame while buffering.
  * @param {number}   [props.borderRadius=0]  px.
@@ -32,13 +36,16 @@ export const FFMPEG_README =
 export default function CursorScrubVideo({
   videoFile,
   axis = "horizontal",
-  reverse = false,
+  startTime = 0,
+  endTime,
+  horizontalKeys,
+  verticalKeys,
   trackingArea = "component",
-  smoothing = 0.22,
+  smoothing = 0.06,
   objectFit = "cover",
   showPoster = true,
   borderRadius = 0,
-  README = `For buttery scrubbing, encode with every frame as a keyframe:\n${FFMPEG_README}`,
+  README = ``,
 }) {
   const rootRef = useRef(null);
   const videoRef = useRef(null);
@@ -47,12 +54,13 @@ export default function CursorScrubVideo({
 
   // Latest props, read from inside the RAF loop / listeners without re-binding.
   const cfg = useRef({});
-  cfg.current = { axis, reverse, smoothing: clamp(smoothing, 0.02, 1) };
+  cfg.current = { axis, startTime, endTime, horizontalKeys, verticalKeys, smoothing: clamp(smoothing, 0.02, 1) };
 
   const pos = useRef({ x: 0, y: 0 }); // normalized cursor 0..1
   const currentTimeRef = useRef(0);
   const seekingRef = useRef(false);
   const readyRef = useRef(false);
+  const modeRef = useRef("h"); // which axis drives the playhead when axis="both"
 
   // Resolve the file to a URL; revoke object URLs on change/unmount.
   useEffect(() => {
@@ -88,18 +96,42 @@ export default function CursorScrubVideo({
     video.currentTime = 0;
 
     let raf = 0;
-    const tick = () => {
+    let last = performance.now();
+    const tick = (now) => {
       raf = requestAnimationFrame(tick);
-      const { axis, reverse, smoothing } = cfg.current;
+      // Frame-rate independent easing: same feel at 60Hz and 144Hz.
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      const { axis, startTime, endTime, horizontalKeys, verticalKeys, smoothing } = cfg.current;
       const duration = video.duration;
       if (!readyRef.current || !Number.isFinite(duration) || duration <= 0) return;
 
-      let p = axis === "horizontal" ? pos.current.x : pos.current.y;
-      if (reverse) p = 1 - p;
-      const target = p * duration;
+      const t0 = clamp(startTime ?? 0, 0, duration);
+      const t1 = clamp(endTime ?? duration, 0, duration);
+      // Cursor position 0..1 → time, via keypoints when given, else linearly
+      // across startTime..endTime (left→right / top→bottom = start→end).
+      const lookup = (keys, q) => (keys?.length ? interpolate(keys, q) : t0 + q * (t1 - t0));
+      const { x, y } = pos.current;
+      let target;
+      let snap = false;
+      if (axis === "both") {
+        const dx = Math.abs(x - 0.5);
+        const dy = Math.abs(y - 0.5);
+        // Hysteresis so the playhead doesn't flip-flop on the diagonals.
+        let mode = modeRef.current;
+        if (mode === "h" && dy > dx + 0.05) mode = "v";
+        else if (mode === "v" && dx > dy + 0.05) mode = "h";
+        // The two segments sit far apart on the timeline; jump instead of
+        // easing through every frame in between.
+        if (mode !== modeRef.current) snap = true;
+        modeRef.current = mode;
+        target = mode === "h" ? lookup(horizontalKeys, x) : lookup(verticalKeys, y);
+      } else {
+        target = axis === "horizontal" ? lookup(horizontalKeys, x) : lookup(verticalKeys, y);
+      }
 
       const cur = currentTimeRef.current;
-      const next = cur + (target - cur) * smoothing;
+      const next = snap ? target : cur + (target - cur) * (1 - Math.pow(1 - smoothing, dt * 60));
       currentTimeRef.current = next;
 
       if (!seekingRef.current && Math.abs(video.currentTime - next) > 0.008) {
@@ -213,6 +245,19 @@ export default function CursorScrubVideo({
       )}
     </div>
   );
+}
+
+// Piecewise-linear lookup over [x, y] points sorted by x.
+function interpolate(keys, x) {
+  if (x <= keys[0][0]) return keys[0][1];
+  for (let i = 1; i < keys.length; i++) {
+    const [x1, y1] = keys[i];
+    if (x <= x1) {
+      const [x0, y0] = keys[i - 1];
+      return y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
+    }
+  }
+  return keys[keys.length - 1][1];
 }
 
 function clamp(v, lo, hi) {
